@@ -1,9 +1,35 @@
 MinimumCore:
     Microarchitecture: Athens
     MemorySize: 256000
-    Precision: 32 
+    Precision: 32
 
 TraceVariables:
     - File: "main.c"
-      LineNumber: 139
-      Expression: "outputDistributions[0:3]"
+
+      LineNumber: 66
+
+      Expression: "outputVariables[0:3]"
+
+BenchmarkingVariables:
+    - VariableName: outputVariables[0]
+      VariableDescription: Calibrated Sensor Output SDP36 Linear
+      OutputObject: Distribution
+      CommandLineArguments: -S 0
+
+    - VariableName: outputVariables[1]
+      VariableDescription: Calibrated Sensor Output SDP37 Linear
+      OutputObject: Distribution
+      CommandLineArguments: -S 1
+
+    - VariableName: outputVariables[2]
+      VariableDescription: Calibrated Sensor Output SDP36 Square
+      OutputObject: Distribution
+      CommandLineArguments: -S 2
+
+    - VariableName: outputVariables[3]
+      VariableDescription: Calibrated Sensor Output SDP37 Square
+      OutputObject: Distribution
+      CommandLineArguments: -S 3
+
+BenchmarkingAllOutputs:
+    - CommandLineArguments: -S 4
