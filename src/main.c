@@ -1,5 +1,5 @@
 /*
- *	Copyright (c) 2026, Signaloid.
+ *	Copyright (c) 2024-2026, Signaloid.
  *
  *	Permission is hereby granted, free of charge, to any person obtaining a copy
  *	of this software and associated documentation files (the "Software"), to deal
@@ -20,64 +20,49 @@
  *	SOFTWARE.
  */
 
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <stddef.h>
 #include <stdbool.h>
-#include <float.h>
-#include <uxhw.h>
 #include "utilities.h"
 #include "kernel.h"
+#include "common.h"
 
-/**
- *	@brief  Sets the Input Variables via call to UxHw Parametric function.
- *
- *	@param  inputVariables	: An array of double values, where the function writes the distributional data.
- */
-static void
-setInputVariablesViaUxHwCall(double * inputVariables)
-{
-	inputVariables[kSensirionSDP3xInputVariableIndexAout] = UxHwDoubleUniformDist(
-		kSensirionSDP3xDefaultInputDistributionAoutUniformDistLow ,
-		kSensirionSDP3xDefaultInputDistributionAoutUniformDistHigh
-	);
+#ifdef NO_OS_AVAILABLE
 
-	inputVariables[kSensirionSDP3xInputVariableIndexVdd] = UxHwDoubleUniformDist(
-		kSensirionSDP3xDefaultInputDistributionVddUniformDistLow,
-		kSensirionSDP3xDefaultInputDistributionVddUniformDistHigh
-	);
-
-	return;
-}
+void
+returnZeroNoOS(void);
+#endif
 
 int
 main(int argc, char *  argv[])
 {
 	CommandLineArguments arguments = { 0 };
 
-	double          calibratedSensorOutput;
-	double *        monteCarloOutputSamples = NULL;
-	clock_t         start;
-	clock_t         end;
-	double          cpuTimeUsedSeconds;
-	double          inputVariables[kSensirionSDP3xInputVariableIndexMax];
-	double          outputVariables[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputMax];
-	const char *    outputVariableNames[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputMax] = {
+	double *                    monteCarloOutputSamples = NULL;
+	clock_t                     start = 0;
+	clock_t                     end;
+	double                      cpuTimeUsedSeconds = 0.0;
+	double                      outputVariables[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputMax] = { 0 };
+	const char *                outputVariableNames[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputMax] = {
 		"outputSDP36Linear",
 		"outputSDP37Linear",
 		"outputSDP36Square",
 		"outputSDP37Square"
 	};
-	const char *    outputVariableDescriptions[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputMax] = {
+	const char *                outputVariableDescriptions[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputMax] = {
 		"Calibrated Sensor Output SDP36 Linear",
 		"Calibrated Sensor Output SDP37 Linear",
 		"Calibrated Sensor Output SDP36 Square",
 		"Calibrated Sensor Output SDP37 Square"
 	};
-	const char *    applicationDescription = "Sensirion SDP3x Analog Conversion Routines";
-	MeanAndVariance meanAndVariance;
+	kOutputVariableTypeIndex    outputVariableTypes[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputMax] = {
+		[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputSDP36Linear500Pa]  = kOutputVariableTypeDistribution,
+		[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputSDP37Linear125Pa]  = kOutputVariableTypeDistribution,
+		[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputSDP36Sqrt500Pa]    = kOutputVariableTypeDistribution,
+		[kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputSDP37Sqrt125Pa]    = kOutputVariableTypeDistribution,
+	};
+	const char *                applicationDescription = "Sensirion SDP3x Analog Conversion Routines";
 
 	/*
 	 *	Get command line arguments.
@@ -88,16 +73,22 @@ main(int argc, char *  argv[])
 	}
 
 	/*
-	 *	Allocate memory for the Monte Carlo samples array.
+	 *	Allocate memory for the Monte Carlo samples array. This is always
+	 *	allocated, even outside Monte Carlo mode, because
+	 *	`SensirionSDP3xCalculateOutputUxHw()` writes its single distributional result to
+	 *	`monteCarloOutputSamples[0]`.
 	 */
-	if (arguments.common.isMonteCarloMode)
-	{
-		monteCarloOutputSamples = (double *) checkedMalloc(
-			arguments.common.numberOfMonteCarloIterations * sizeof(double),
-			__FUNCTION__,
-			__LINE__
-		);
-	}
+	monteCarloOutputSamples = (double *) checkedMalloc(
+		(arguments.common.numberOfMonteCarloIterations > 0 ? arguments.common.numberOfMonteCarloIterations : 1) * sizeof(double),
+		__FILE__,
+		__LINE__
+	);
+
+	const bool isScalarOutputSelected = isSelectedOutputScalar(
+		&arguments.common,
+		outputVariableTypes,
+		kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputMax
+	);
 
 	/*
 	 *	Start timing.
@@ -107,41 +98,47 @@ main(int argc, char *  argv[])
 		start = clock();
 	}
 
-	for (size_t ii = 0; ii < arguments.common.numberOfMonteCarloIterations; ii++)
-	{
-		/*
-		 *	Set input distribution values, inside the main computation
-		 *	loop, so that it can also generate samples in the native
-		 *	Monte Carlo Execution Mode.
-		 */
-		setInputVariablesViaUxHwCall(inputVariables);
-
-		/*
-		 *	Depending on the output select value either calculates
-		 *	the value for a single output or for all outputs.
-		 */
-		calibratedSensorOutput = SensirionSDP3x_calculateOutput(arguments.common.outputSelect, inputVariables, outputVariables);
-
-		/*
-		 *	For this application, calibratedSensorOutput is the item we track.
-		 */
-		if (arguments.common.isMonteCarloMode)
-		{
-			monteCarloOutputSamples[ii] = calibratedSensorOutput;
-		}
-	}
-
 	/*
-	 *	If not doing Laplace version, then approximate the cost of the third phase of
-	 *	Monte Carlo (post-processing), by calculating the mean and variance.
+	 *	Dispatch to the mode-specific kernel. The Monte Carlo loop lives
+	 *	inside `SensirionSDP3xCalculateOutputMonteCarlo`; UxHw mode runs a single
+	 *	distributional evaluation inside `SensirionSDP3xCalculateOutputUxHw`.
+	 *	Both take the fields they need as scalars, so this is the only place
+	 *	that unpacks `CommandLineArguments` for the kernel.
 	 */
 	if (arguments.common.isMonteCarloMode)
 	{
-		meanAndVariance = calculateMeanAndVarianceOfDoubleSamples(
-			monteCarloOutputSamples,
-			arguments.common.numberOfMonteCarloIterations
+		(void) SensirionSDP3xCalculateOutputMonteCarlo(
+			arguments.common.outputSelect,
+			arguments.common.numberOfMonteCarloIterations,
+			outputVariables,
+			monteCarloOutputSamples
 		);
-		calibratedSensorOutput = meanAndVariance.mean;
+
+		/*
+		 *	Approximate the cost of the third phase of Monte Carlo
+		 *	(post-processing), by calculating the mean and variance.
+		 *	Matches the original implementation: `outputVariables` is
+		 *	left holding the final iteration's raw values (not
+		 *	overwritten with the mean), and the result is not otherwise
+		 *	read. This lives here rather than in the dispatch kernel
+		 *	because it needs `common.h`, which `kernel.c` is compiled
+		 *	without by the multi-sensor builds that consume it.
+		 */
+		if (!isScalarOutputSelected)
+		{
+			(void) calculateMeanAndVarianceOfDoubleSamples(
+				monteCarloOutputSamples,
+				arguments.common.numberOfMonteCarloIterations
+			);
+		}
+	}
+	else
+	{
+		(void) SensirionSDP3xCalculateOutputUxHw(
+			arguments.common.outputSelect,
+			outputVariables,
+			monteCarloOutputSamples
+		);
 	}
 
 	/*
@@ -164,7 +161,8 @@ main(int argc, char *  argv[])
 			outputVariables,
 			outputVariableDescriptions,
 			kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputMax,
-			applicationDescription
+			applicationDescription,
+			outputVariableTypes
 		);
 	}
 	else
@@ -175,7 +173,8 @@ main(int argc, char *  argv[])
 			outputVariables,
 			outputVariableNames,
 			outputVariableDescriptions,
-			monteCarloOutputSamples
+			monteCarloOutputSamples,
+			outputVariableTypes
 		);
 	}
 
@@ -211,11 +210,17 @@ main(int argc, char *  argv[])
 	{
 		saveMonteCarloDoubleDataToDataDotOutFile(
 			monteCarloOutputSamples, (uint64_t) (cpuTimeUsedSeconds * 1000000),
-			arguments.common.numberOfMonteCarloIterations
+			isScalarOutputSelected ? 1 : arguments.common.numberOfMonteCarloIterations
 		);
-
-		free(monteCarloOutputSamples);
 	}
 
+	free(monteCarloOutputSamples);
+
+#ifdef NO_OS_AVAILABLE
+	returnZeroNoOS();
+#else
+
 	return 0;
+
+#endif
 }
