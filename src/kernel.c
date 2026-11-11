@@ -1,5 +1,5 @@
 /*
- *	Copyright (c) 2026, Signaloid.
+ *	Copyright (c) 2024-2026, Signaloid.
  *
  *	Permission is hereby granted, free of charge, to any person obtaining a copy
  *	of this software and associated documentation files (the "Software"), to deal
@@ -21,8 +21,13 @@
  */
 
 #include <math.h>
+#include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <uxhw.h>
 #include "kernel.h"
+#include "sensirion-sdp3x-uxhw.h"
+#include "sensirion-sdp3x-monte-carlo.h"
 
 /**
  *	@brief  Implementation of the sign function for distributional values.
@@ -42,11 +47,11 @@ sign(double arg)
 }
 
 double
-SensirionSDP3x_calculateOutput(uint8_t outputSelect, double *  inputVariables, double *  outputVariables)
+SensirionSDP3x_calculateOutput(uint8_t outputSelect, const double *  inputVariables, double *  outputVariables)
 {
-	double  Vdd     = inputVariables[kSensirionSDP3xInputVariableIndexVdd];
-	double  Aout    = inputVariables[kSensirionSDP3xInputVariableIndexAout];
-	double  calibratedValue;
+	double  Vdd             = inputVariables[kSensirionSDP3xInputVariableIndexVdd];
+	double  Aout            = inputVariables[kSensirionSDP3xInputVariableIndexAout];
+	double  calibratedValue = 0.0;
 
 	bool calculateAllOutputs = (outputSelect == kSensirionSDP3xOutputVariableIndexCalibratedSensorOutputMax);
 
@@ -90,4 +95,81 @@ SensirionSDP3x_calculateOutput(uint8_t outputSelect, double *  inputVariables, d
 	}
 
 	return calibratedValue;
+}
+
+void
+SensirionSDP3xSetInputVariablesViaUxHwCall(double * inputVariables)
+{
+	inputVariables[kSensirionSDP3xInputVariableIndexAout] = UxHwDoubleUniformDist(
+		kSensirionSDP3xDefaultInputDistributionAoutUniformDistLow,
+		kSensirionSDP3xDefaultInputDistributionAoutUniformDistHigh
+	);
+
+	inputVariables[kSensirionSDP3xInputVariableIndexVdd] = UxHwDoubleUniformDist(
+		kSensirionSDP3xDefaultInputDistributionVddUniformDistLow,
+		kSensirionSDP3xDefaultInputDistributionVddUniformDistHigh
+	);
+
+	return;
+}
+
+double
+SensirionSDP3xCalculateOutputUxHw(
+	size_t      outputSelect,
+	double *    outputVariables,
+	double *    monteCarloOutputSamples)
+{
+	double  inputVariables[kSensirionSDP3xInputVariableIndexMax];
+	double  calibratedSensorOutput;
+
+	/*
+	 *	Set input distribution values via a single UxHw distributional
+	 *	evaluation. Unlike the Monte Carlo path, there is no sample loop.
+	 */
+	SensirionSDP3xSetInputVariablesViaUxHwCall(inputVariables);
+
+	/*
+	 *	Hand the already-sampled inputs down to the pure computational
+	 *	function in `sensirion-sdp3x-uxhw.c`, which knows nothing about this
+	 *	demo's config macros.
+	 */
+	calibratedSensorOutput = sensirionSDP3xUxHw(
+		(uint8_t) outputSelect,
+		inputVariables,
+		outputVariables
+	);
+
+	monteCarloOutputSamples[0] = calibratedSensorOutput;
+
+	return calibratedSensorOutput;
+}
+
+double
+SensirionSDP3xCalculateOutputMonteCarlo(
+	size_t      outputSelect,
+	size_t      numberOfMonteCarloIterations,
+	double *    outputVariables,
+	double *    monteCarloOutputSamples)
+{
+	double inputVariables[kSensirionSDP3xInputVariableIndexMax];
+
+	/*
+	 *	Hand the (as yet unpopulated) inputs array down to the pure
+	 *	computational function in `sensirion-sdp3x-monte-carlo.c`, which
+	 *	runs the iteration loop itself: it resamples `inputVariables` via
+	 *	`SensirionSDP3xSetInputVariablesViaUxHwCall()` once per iteration and knows
+	 *	nothing about this demo's config macros.
+	 *
+	 *	The mean and variance that approximate Monte Carlo's post-processing
+	 *	cost are computed by the caller in `main.c`, since they need
+	 *	`common.h` and this file is compiled without it by the multi-sensor
+	 *	builds.
+	 */
+	return sensirionSDP3xMonteCarlo(
+		(uint8_t) outputSelect,
+		inputVariables,
+		outputVariables,
+		monteCarloOutputSamples,
+		numberOfMonteCarloIterations
+	);
 }
